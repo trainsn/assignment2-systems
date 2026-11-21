@@ -29,24 +29,29 @@ small_config = {
     "d_ff": 3072,
 }
 
-def step(model, inputs, targets, optimizer, mode):
+def step(model, inputs, targets, optimizer, mode, use_bf16=False):
     if mode not in ("forward", "forward_backward", "full"):
         raise ValueError(f"Unknown mode: {mode}")
 
     if mode != "forward":
         optimizer.zero_grad(set_to_none=True)
 
-    with torch.cuda.nvtx.range("forward"):
-        logits = model(inputs)
-    
-    if mode == "forward":
-        return 
-    
-    with torch.cuda.nvtx.range("loss"):
-        loss = F.cross_entropy(
-            logits.reshape(-1, logits.size(-1)), 
-            targets.reshape(-1),
-        )
+    with torch.autocast(
+        device_type="cuda",
+        dtype=torch.bfloat16,
+        enabled=use_bf16
+    ):
+        with torch.cuda.nvtx.range("forward"):
+            logits = model(inputs)
+        
+        if mode == "forward":
+            return 
+        
+        with torch.cuda.nvtx.range("loss"):
+            loss = F.cross_entropy(
+                logits.reshape(-1, logits.size(-1)), 
+                targets.reshape(-1),
+            )
 
     with torch.cuda.nvtx.range("backward"):
         loss.backward()
@@ -56,13 +61,13 @@ def step(model, inputs, targets, optimizer, mode):
             optimizer.step()
 
 
-def benchmark(model, inputs, targets, optimizer, mode, w=5, n=10):
+def benchmark(model, inputs, targets, optimizer, mode, w=5, n=10, use_bf16=False):
     def synchronize():
         if inputs.device.type == "cuda":
             torch.cuda.synchronize(inputs.device)
         
     for _ in range(w):
-        step(model, inputs, targets, optimizer, mode)
+        step(model, inputs, targets, optimizer, mode, use_bf16=use_bf16)
         synchronize()
     
     times = []
@@ -71,7 +76,7 @@ def benchmark(model, inputs, targets, optimizer, mode, w=5, n=10):
         synchronize()
         start = timeit.default_timer()
 
-        step(model, inputs, targets, optimizer, mode)
+        step(model, inputs, targets, optimizer, mode, use_bf16=use_bf16)
 
         synchronize()
         elapsed = timeit.default_timer() - start
@@ -100,16 +105,25 @@ if __name__ == "__main__":
     )
 
     for mode in ("forward", "forward_backward", "full"):
-        torch.manual_seed(42)
+        results = {}
 
-        model = create_model(small_config, device=device)
-        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        for use_bf16 in (False, True):
+            torch.manual_seed(42)
 
-        mean, std = benchmark(
-            model, inputs, targets, optimizer, 
-            mode=mode, w=5, n=10
-        )
+            model = create_model(small_config, device=device)
+            optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
 
-        print(f"Mode: {mode}, Mean time: {mean:.2f} ms, Std dev: {std:.2f} ms")
+            mean, std = benchmark(
+                model, inputs, targets, optimizer, 
+                mode=mode, w=5, n=10, use_bf16=use_bf16
+            )
 
-        del model, optimizer
+            precision = "BF16" if use_bf16 else "FP32"
+            results[precision] = mean
+            
+            print(f"{mode} | {precision}: {mean:.2f} ± {std:.2f} ms")
+
+            del model, optimizer
+        
+        speedup = results["FP32"] / results["BF16"]
+        print(f"BF16 Speedup: {speedup:.2f}x\n")

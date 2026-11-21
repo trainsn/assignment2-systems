@@ -167,3 +167,4 @@ cython_debug/
 *.nsys-rep
 *.sqlite
 *.qdstrm
+nvtx_kernels.txt

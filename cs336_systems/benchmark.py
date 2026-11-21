@@ -36,20 +36,24 @@ def step(model, inputs, targets, optimizer, mode):
     if mode != "forward":
         optimizer.zero_grad(set_to_none=True)
 
-    logits = model(inputs)
+    with torch.cuda.nvtx.range("forward"):
+        logits = model(inputs)
     
     if mode == "forward":
         return 
     
-    loss = F.cross_entropy(
-        logits.reshape(-1, logits.size(-1)), 
-        targets.reshape(-1),
-    )
+    with torch.cuda.nvtx.range("loss"):
+        loss = F.cross_entropy(
+            logits.reshape(-1, logits.size(-1)), 
+            targets.reshape(-1),
+        )
 
-    loss.backward()
+    with torch.cuda.nvtx.range("backward"):
+        loss.backward()
 
     if mode == "full":
-        optimizer.step()
+        with torch.cuda.nvtx.range("optimizer"):
+            optimizer.step()
 
 
 def benchmark(model, inputs, targets, optimizer, mode, w=5, n=10):

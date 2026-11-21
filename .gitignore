@@ -168,3 +168,5 @@ cython_debug/
 *.sqlite
 *.qdstrm
 nvtx_kernels.txt
+memory_profiles/
+*.pickle

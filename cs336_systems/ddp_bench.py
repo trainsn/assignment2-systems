@@ -8,7 +8,7 @@ import torch.nn.functional as F
 import torch.distributed as dist
 
 from cs336_systems.benchmark import create_model, small_config
-from cs336_systems.ddp import NaiveDDP
+from cs336_systems.ddp import NaiveDDP, FlatDDP
 
 xl_config = {
     **small_config,
@@ -61,6 +61,7 @@ def main():
     parser.add_argument("--model", choices=["small", "xl"], default="xl")
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--steps", type=int, default=10)
+    parser.add_argument("--ddp", choices=["naive", "flat"], default="naive")
     args = parser.parse_args()
 
     local_rank = int(os.environ["LOCAL_RANK"])
@@ -76,7 +77,10 @@ def main():
     
     torch.manual_seed(42 + rank)
     model = create_model(config, device=device)
-    model = NaiveDDP(model)
+    if args.ddp == "naive":
+        model = NaiveDDP(model)
+    else:
+        model = FlatDDP(model)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, foreach=False)
 

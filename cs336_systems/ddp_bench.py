@@ -8,7 +8,7 @@ import torch.nn.functional as F
 import torch.distributed as dist
 
 from cs336_systems.benchmark import create_model, small_config
-from cs336_systems.ddp import NaiveDDP, FlatDDP
+from cs336_systems.ddp import NaiveDDP, FlatDDP, AsyncDDP
 
 xl_config = {
     **small_config,
@@ -34,7 +34,7 @@ def train_step(model, inputs, targets, optimizer):
     with torch.cuda.nvtx.range("backward"):
         loss.backward()
     
-    torch.cuda.synchronize()
+    torch.cuda.current_stream().synchronize()
     comm_start = time.perf_counter()
 
     with torch.cuda.nvtx.range("gradient_sync"):
@@ -61,7 +61,11 @@ def main():
     parser.add_argument("--model", choices=["small", "xl"], default="xl")
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--steps", type=int, default=10)
-    parser.add_argument("--ddp", choices=["naive", "flat"], default="naive")
+    parser.add_argument(
+        "--ddp",
+        choices=["naive", "flat", "async"],
+        default="naive",
+    )
     args = parser.parse_args()
 
     local_rank = int(os.environ["LOCAL_RANK"])
@@ -79,8 +83,10 @@ def main():
     model = create_model(config, device=device)
     if args.ddp == "naive":
         model = NaiveDDP(model)
-    else:
+    elif args.ddp == "flat":
         model = FlatDDP(model)
+    else:
+        model = AsyncDDP(model)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, foreach=False)
 

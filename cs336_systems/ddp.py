@@ -44,3 +44,33 @@ class FlatDDP(NaiveDDP):
         flat_grads.div_(world_size)
         for buf, grad in zip(grads, _unflatten_dense_tensors(flat_grads, grads)):
             buf.copy_(grad)
+
+
+class AsyncDDP(NaiveDDP):
+    def __init__(self, module: nn.Module):
+        super().__init__(module)
+
+        self.handles = []
+
+        for param in self.module.parameters():
+            if param.requires_grad:
+                param.register_post_accumulate_grad_hook(self.grad_hook)
+        
+    def grad_hook(self, param):
+        if param.grad is None:
+            return 
+        
+        handle = dist.all_reduce(param.grad, op=dist.ReduceOp.SUM, async_op=True)
+        self.handles.append(handle)
+    
+    def finish_gradient_synchronization(self):
+        world_size = dist.get_world_size()
+
+        for handle in self.handles:
+            handle.wait()
+        
+        for param in self.module.parameters():
+            if param.grad is not None:
+                param.grad.div_(world_size)
+        
+        self.handles.clear()
